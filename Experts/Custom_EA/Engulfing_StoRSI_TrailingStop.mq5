@@ -244,7 +244,7 @@ void ApplyTrailingStop(uint trailingStopPoints) {
           newSL = price - trailingStopPoints * point;
           if ((sl == 0.0 || newSL > sl) && (price - openPrice) > trailingStopPoints * point) {
             newSL = NormalizeDouble(newSL, digits);
-            if (!TradePositionModify(ticket, newSL, PositionGetDouble(POSITION_TP)))
+            if (!ExtTrade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP)))
               PrintFormat("Failed to modify trailing stop for BUY position #%I64u, error=%d", ticket, GetLastError());
           }
         } else if (type == POSITION_TYPE_SELL) {
@@ -252,28 +252,13 @@ void ApplyTrailingStop(uint trailingStopPoints) {
           newSL = price + trailingStopPoints * point;
           if ((sl == 0.0 || newSL < sl) && (openPrice - price) > trailingStopPoints * point) {
             newSL = NormalizeDouble(newSL, digits);
-            if (!TradePositionModify(ticket, newSL, PositionGetDouble(POSITION_TP)))
+            if (!ExtTrade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP)))
               PrintFormat("Failed to modify trailing stop for SELL position #%I64u, error=%d", ticket, GetLastError());
           }
         }
       }
     }
   }
-}
-
-// Helper to modify position SL/TP                                 |
-bool TradePositionModify(ulong ticket, double sl, double tp) {
-  MqlTradeRequest request;
-  MqlTradeResult  result;
-  ZeroMemory(request);
-  ZeroMemory(result);
-  request.action   = TRADE_ACTION_SLTP;
-  request.position = ticket;
-  request.symbol   = Symbol();
-  request.sl       = sl;
-  request.tp       = tp;
-  request.magic    = InpMagicNumber;
-  return OrderSend(request, result) && result.retcode == TRADE_RETCODE_DONE;
 }
 
 bool CheckState() {

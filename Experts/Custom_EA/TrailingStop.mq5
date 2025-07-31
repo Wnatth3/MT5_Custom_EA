@@ -6,8 +6,19 @@
 //+------------------------------------------------------------------+
 /*
 Features of TrailingStop.mq5:
-
+- Supports multiple stop loss strategies: None, Trailing Stop, and Break Even.
+- Option to set an initial stop loss when a new position is opened.
+- Trailing stop can be activated after a configurable profit trigger is reached.
+- Break-even stop loss calculation includes trading fees per lot.
+- Can close all positions if account equity drops below a minimum or exceeds a maximum loss percentage.
+- Option to close all positions when a profit target is reached (separately for long and short positions).
+- Option to close positions that have been held longer than a specified number of bars.
+- Automatically deletes all pending orders and removes the expert if risk limits are breached.
+- Configurable slippage, profit targets, holding time, and other risk management parameters.
+- Supports magic number for filtering positions/orders.
+- Detailed logging for debugging and error tracking.
 */
+
 #property copyright "Phattharakorn Mahasorasak"
 #property link "https://github.com/Wnatth3"
 #property version "1.00"
@@ -22,18 +33,25 @@ enum stopLossType {
 
 //----- Input parameters
 // trading
-input group "Close Position Bot";
-input uint         inpSlippage            = 10;      // Slippage in points (Default = 10)
-input bool         inpEnableInitStopLoss  = true;    // Enable initial stop loss (Default = true)
-input uint         inpInitStopLoss        = 1700;    // Stop Loss in points (Default = 1500)
-input stopLossType inpStopLossType        = slNone;  // Type of stop loss: Trailing Stop or Break Even (Default = slNone)
-input uint         inpTrailingStop        = 1200;    // Trailing stop in points (Default = 1000)
-input uint         inpProfitTrigger       = 2000;    // Take Profit in points (Default = 2000)
-input double       inpFeePerLot           = 12.0;    // Fee per lot both side of position in USD (Default = 12.0)
-input bool         inpEnableCloseByProfit = false;   // Enable closing by profit (Default = false)
-input uint         inpProfitTarget        = 2000;    // Close by profit in points (Default = 2000)
-input bool         inpEnableCloseByTime   = false;   // Enable closing by time (Default = false)
-input uint         inpHoldingBar          = 10;      // Position holding time in bars (Default = 10)
+input group ">>> Close Position Bot <<<";
+input group "Initial Stop Loss";
+input bool inpEnableInitStopLoss = false;  // Enable initial stop loss (Default = false)
+input uint inpInitStopLoss       = 1700;   // Initial stop Loss in points (Default = 1700)
+input group "Stop Loss Type";
+input stopLossType inpStopLossType = slNone;  // Type of stop loss: Trailing Stop or Break Even (Default = slNone)
+input group "Trailing Stop";
+input uint inpTrailingStop  = 1200;  // Trailing stop in points (Default = 1200)
+input uint inpProfitTrigger = 2000;  // Profit trigger in points (Default = 2000)
+input group "Break Even Stop Loss";
+input double inpFeePerLot = 16.0;  // Fee per lot both side of positions in USD (Default = 16.0)
+input group "Close Position by Profit";
+input bool inpEnableCloseByProfit = false;  // Enable closing by profit (Default = false)
+input uint inpProfitTarget        = 2000;   // Profit target in points (Default = 2000)
+input group "Close Position by Time";
+input bool inpEnableCloseByTime = false;  // Enable closing by time (Default = false)
+input uint inpHoldingBar        = 10;     // Position holding time in bars (Default = 10)
+input group "Slippage";
+input uint inpSlippage = 10;  // Slippage in points (Default = 10)
 // risk management
 input group "Risk Management";
 input double inpMinimumEquity  = 100.0;  // Minimum equity to allow trading (Default = 100.0)
@@ -43,7 +61,7 @@ input group "Expert ID";
 input long inpMagicNumber = 121400;  // Magic Number
 
 //----- global variables
-double lot = 0.01;  // Lot (Default = 0.01)
+// double lot = 0.01;  // Lot (Default = 0.01)
 double startingBalance;
 
 //----- Objects
@@ -71,7 +89,7 @@ void OnTick() {
     ClearAllPositionsAndOrders();
   }
 
-  if (!FindExistingPositions()) return;
+  if (!HasOpenPosition()) return;
 
   if (inpEnableInitStopLoss) SetInitialStopLoss();
 
@@ -82,7 +100,7 @@ void OnTick() {
   switch (inpStopLossType) {
     case slTrailingStop: ApplyTrailingStop(); break;
     case slBreakEven: ApplyStopLossAtBreakEven(); break;
-    default: break;  // No action for slNone or unrecognized types
+    default: break;  // No action for slNone
   }
 }
 
@@ -120,7 +138,7 @@ void ClearAllPositionsAndOrders() {
   ExpertRemove();
 }
 
-bool FindExistingPositions() {
+bool HasOpenPosition() {
   for (int i = PositionsTotal() - 1; i >= 0; i--) {
     if (PositionGetTicket(i) != 0) {
       if (PositionGetString(POSITION_SYMBOL) == _Symbol) return true;

@@ -25,6 +25,12 @@ Features of TrailingStop.mq5:
 
 #include <Trade\Trade.mqh>
 
+enum initSlType {
+  initSlNone,
+  initSlFixed,
+  initSlAtr
+};
+
 enum stopLossType {
   slNone,
   slTrailingStop,
@@ -34,16 +40,22 @@ enum stopLossType {
 //----- Input parameters
 // trading
 input group ">>> Close Position Bot <<<";
-input group "Initial Stop Loss";
-input bool inpEnableInitStopLoss = false;  // Enable initial stop loss (Default = false)
-input uint inpInitStopLoss       = 1700;   // Initial stop Loss in points (Default = 1700)
+input group "Initial Stop Loss Type";
+input initSlType inpInitSlType = initSlNone;  // Initial Stop Loss Type: None, Fixed, or ATR (Default = initSlNone)
+// input bool inpEnableInitStopLoss = false;  // Enable initial stop loss (Default = false)
+input group "Initial Stop Loss: Fixed";
+input uint inpInitSlFixed = 2000;  // Initial stop Loss in points (Default = 2000)
+input group "Initial Stop Loss: ATR";
+input uint   inpAtrPeriod     = 9;    // ATR period for initial stop loss (Default = 9)
+input double inpAtrMultiplier = 1.5;  // ATR multiplier for initial stop loss (Default = 1.5)
 input group "Stop Loss Type";
 input stopLossType inpStopLossType = slNone;  // Type of stop loss: Trailing Stop or Break Even (Default = slNone)
 input group "Trailing Stop";
-input uint inpTrailingStop  = 1200;  // Trailing stop in points (Default = 1200)
-input uint inpProfitTrigger = 2000;  // Profit trigger in points (Default = 2000)
+input uint inpTrailingStop    = 1200;  // Trailing stop in points (Default = 1200)
+input uint inpTsProfitTrigger = 2000;  // Profit trigger in points (Default = 2000)
 input group "Break Even Stop Loss";
-input double inpFeePerLot = 16.0;  // Fee per lot both side of positions in USD (Default = 16.0)
+input double inpFeePerLot       = 16.0;  // Fee per lot both side of positions in USD (Default = 16.0)
+input double inpBeProfitTrigger = 2000;  // Profit trigger in points for break-even stop loss (Default = 2000)
 input group "Close Position by Profit";
 input bool inpEnableCloseByProfit = false;  // Enable closing by profit (Default = false)
 input uint inpProfitTarget        = 2000;   // Profit target in points (Default = 2000)
@@ -91,7 +103,12 @@ void OnTick() {
 
   if (!HasOpenPosition()) return;
 
-  if (inpEnableInitStopLoss) SetInitialStopLoss();
+  // if (inpEnableInitStopLoss) SetInitStopLossFixed();
+  switch (inpInitSlType) {
+    case initSlFixed: SetInitStopLossFixed(); break;
+    case initSlAtr: SetInitStopLossAtr(); break;
+    default: break;  // No action for slInitNone
+  }
 
   if (inpEnableCloseByProfit) CloseByProfit();
 
@@ -135,7 +152,7 @@ void ClearAllPositionsAndOrders() {
       }
     }
   }
-  ExpertRemove();
+  // ExpertRemove(); // Remove the expert from the chart
 }
 
 bool HasOpenPosition() {
@@ -147,7 +164,7 @@ bool HasOpenPosition() {
   return false;
 }
 
-void SetInitialStopLoss() {
+void SetInitStopLossFixed() {
   for (int i = PositionsTotal() - 1; i >= 0; i--) {
     if (PositionGetTicket(i) == 0) continue;  // Skip if failed to get position
     if (PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
@@ -158,14 +175,35 @@ void SetInitialStopLoss() {
     double takeProfit = PositionGetDouble(POSITION_TP);
     if (stopLoss == 0.0) {
       double newStop = 0.0;
-      if (type == POSITION_TYPE_BUY) newStop = openPrice - inpInitStopLoss * point;
-      else if (type == POSITION_TYPE_SELL) newStop = openPrice + inpInitStopLoss * point;
+      if (type == POSITION_TYPE_BUY) newStop = openPrice - inpInitSlFixed * point;
+      else if (type == POSITION_TYPE_SELL) newStop = openPrice + inpInitSlFixed * point;
 
       if (!trade.PositionModify(PositionGetTicket(i), newStop, takeProfit))
         PrintFormat("Failed to set initial stop loss for position: %I64u, Error: %d", PositionGetTicket(i), GetLastError());
-      // else PrintFormat("Initial stop loss set for position: %I64u at %f", PositionGetTicket(i), newStop);
+      // else PrintFormat("Initial fixed stop loss set for position: %I64u at %f", PositionGetTicket(i), newStop);
     }
-    // }
+  }
+}
+
+void SetInitStopLossAtr() {
+  for (int i = PositionsTotal() - 1; i >= 0; i--) {
+    if (PositionGetTicket(i) == 0) continue;  // Skip if failed to get position
+    if (PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+    long   type       = PositionGetInteger(POSITION_TYPE);
+    double atr        = iATR(_Symbol, PERIOD_CURRENT, inpAtrPeriod);
+    double point      = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double openPrice  = PositionGetDouble(POSITION_PRICE_OPEN);
+    double stopLoss   = PositionGetDouble(POSITION_SL);
+    double takeProfit = PositionGetDouble(POSITION_TP);
+    if (stopLoss == 0.0) {
+      double newStop = 0.0;
+      if (type == POSITION_TYPE_BUY) newStop = openPrice - atr * inpAtrMultiplier * point;
+      else if (type == POSITION_TYPE_SELL) newStop = openPrice + atr * inpAtrMultiplier * point;
+
+      if (!trade.PositionModify(PositionGetTicket(i), newStop, takeProfit))
+        PrintFormat("Failed to set initial stop loss for position: %I64u, Error: %d", PositionGetTicket(i), GetLastError());
+      // else PrintFormat("Initial ATR stop loss set for position: %I64u at %f", PositionGetTicket(i), newStop);
+    }
   }
 }
 
@@ -242,7 +280,7 @@ void ApplyTrailingStop() {
     double point           = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     double openPrice       = PositionGetDouble(POSITION_PRICE_OPEN);
     double stopLoss        = PositionGetDouble(POSITION_SL);
-    double profitTrigger   = (type == POSITION_TYPE_BUY) ? openPrice + inpProfitTrigger * point : openPrice - inpProfitTrigger * point;
+    double profitTrigger   = (type == POSITION_TYPE_BUY) ? openPrice + inpTsProfitTrigger * point : openPrice - inpTsProfitTrigger * point;
     double currPrice       = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     bool   triggerReached  = (type == POSITION_TYPE_BUY) ? (currPrice >= profitTrigger) : (currPrice <= profitTrigger);
     double newStopLoss     = (type == POSITION_TYPE_BUY) ? currPrice - inpTrailingStop * point : currPrice + inpTrailingStop * point;
@@ -289,7 +327,7 @@ void ApplyStopLossAtBreakEven() {
     double point           = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     double openPrice       = PositionGetDouble(POSITION_PRICE_OPEN);
     double stopLoss        = PositionGetDouble(POSITION_SL);
-    double profitTrigger   = (type == POSITION_TYPE_BUY) ? openPrice + inpProfitTrigger * point : openPrice - inpProfitTrigger * point;
+    double profitTrigger   = (type == POSITION_TYPE_BUY) ? openPrice + inpBeProfitTrigger * point : openPrice - inpBeProfitTrigger * point;
     double currPrice       = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     bool   triggerReached  = (type == POSITION_TYPE_BUY) ? (currPrice >= profitTrigger) : (currPrice <= profitTrigger);
     double newStopLoss     = (type == POSITION_TYPE_BUY) ? longBreakEven : shortBreakEven;

@@ -30,10 +30,8 @@ Features of TrailingStop.mq5:
 //+------------------------------------------------------------------+
 //|  RandomTrade.mq5 - Open up to 5 random trades per 24 hours       |
 //+------------------------------------------------------------------+
-// input double Lots           = 0.1;  // Lot size
-int Slippage = 10;  // Slippage
-// input double StopLossPips   = 200;  // Stop loss in points
-// input double TakeProfitPips = 400;  // Take profit in points
+double Lots     = 0.01;  // Lot size
+int    Slippage = 10;    // Slippage
 
 #define MAX_TRADES_PER_DAY 1
 
@@ -60,30 +58,23 @@ void TryRandomTrade() {
   }
 
   // Check if we already reached the daily limit
-  if (tradeCount >= MAX_TRADES_PER_DAY)
-    return;
+  if (tradeCount >= MAX_TRADES_PER_DAY) return;
 
   // Random condition: e.g., 1% chance per tick
   if (MathRand() % 1000 == 0) {
     // Pick random direction: 0 = buy, 1 = sell
     bool isBuy = (MathRand() % 2 == 0);
 
-    double price /*, sl, tp*/;
+    double price;
     if (isBuy) {
       price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      // sl    = price - StopLossPips * _Point;
-      // tp    = price + TakeProfitPips * _Point;
-      // if (OrderSend(_Symbol, ORDER_TYPE_BUY, Lots, price, Slippage, sl, tp)) {
-      if (trade.Buy(0.01, _Symbol, price, 0.0, 0.0, NULL)) {
+      if (trade.Buy(lots, _Symbol, price, 0.0, 0.0, NULL)) {
         Print("Random BUY opened");
         tradeTimes[tradeCount++] = nowTime;
       }
     } else {
       price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      // sl    = price + StopLossPips * _Point;
-      // tp    = price - TakeProfitPips * _Point;
-      // if (OrderSend(_Symbol, ORDER_TYPE_SELL, Lots, price, Slippage, sl, tp)) {
-      if (trade.Sell(0.01, _Symbol, price, 0.0, 0.0, NULL)) {
+      if (trade.Sell(lots, _Symbol, price, 0.0, 0.0, NULL)) {
         Print("Random SELL opened");
         tradeTimes[tradeCount++] = nowTime;
       }
@@ -122,7 +113,7 @@ input uint inpTrailingStop    = 1200;  // Trailing stop in points (Default = 120
 input uint inpTsProfitTrigger = 2000;  // Profit trigger in points (Default = 2000)
 input group "Break Even Stop Loss";
 input double inpFeePerLot       = 20.0;  // Fee per lot both side of positions in USD (Default = 16.0)
-input double inpBeProfitTrigger = 2000;  // Profit trigger in points for break-even stop loss (Default = 2000)
+input uint   inpBeProfitTrigger = 2000;  // Profit trigger in points for break-even stop loss (Default = 2000)
 input group "Close Position by Profit";
 input bool inpEnableCloseByProfit = false;  // Enable closing by profit (Default = false)
 input uint inpProfitTarget        = 2000;   // Profit target in points (Default = 2000)
@@ -294,7 +285,7 @@ void SetInitStopLossAtr() {
       double newStop = 0.0;
       if (type == POSITION_TYPE_BUY) newStop = openPrice - atr * inpAtrMultiplier;
       else if (type == POSITION_TYPE_SELL) newStop = openPrice + atr * inpAtrMultiplier;
-      PrintFormat("ATR: %f | Stop loss: %f | Take profit: %f | Multiplier: %f | Point: %f", atr, newStop, takeProfit, inpAtrMultiplier, point);
+      // PrintFormat("ATR: %f | Stop loss: %f | Take profit: %f | Multiplier: %f | Point: %f", atr, newStop, takeProfit, inpAtrMultiplier, point);
 
       if (!trade.PositionModify(PositionGetTicket(i), newStop, takeProfit))
         PrintFormat("Failed to set initial stop loss for position: %I64u, Error: %d", PositionGetTicket(i), GetLastError());
@@ -412,25 +403,42 @@ void ApplyStopLossAtBreakEven() {
       totalShortFee += inpFeePerLot * volume;
     }
   }
-  // PrintFormat("totalLongVolume: %f | totalLongCost: %f | totalLongFee: %f", totalLongVolume, totalLongCost, totalLongFee);
-  double longBreakEven  = (totalLongVolume > 0.0) ? (totalLongCost / totalLongVolume + totalLongFee) : 0.0;
-  double shortBreakEven = (totalShortVolume > 0.0) ? (totalShortCost / totalShortVolume - totalShortFee) : 0.0;
-  // PrintFormat("*Long Break Even: %f | Short Break Even: %f", longBreakEven, shortBreakEven);
+
+  double avgLongPrice  = (totalLongVolume > 0.0) ? (totalLongCost / totalLongVolume) : 0.0;
+  double avgShortPrice = (totalShortVolume > 0.0) ? (totalShortCost / totalShortVolume) : 0.0;
+
+  double tick_value, tick_size;
+  if (!SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE, tick_value) ||
+      !SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE, tick_size)) {
+    Print("Error: Failed to get symbol properties");
+    tick_value = 0.0;
+    tick_size  = 0.0;
+  }
+
+  // Calculate ticks needed to cover total fees
+  double longTicksNeeded  = (tick_value > 0.0) ? (totalLongFee / (tick_value * totalLongVolume)) : 0.0;
+  double shortTicksNeeded = (tick_value > 0.0) ? (totalShortFee / (tick_value * totalShortVolume)) : 0.0;
+  // Convert ticks to price difference
+  double longPriceDiff  = longTicksNeeded * tick_size;
+  double shortPriceDiff = shortTicksNeeded * tick_size;
+
+  double longBreakEven  = (avgLongPrice > 0.0) ? (avgLongPrice + longPriceDiff) : 0.0;
+  double shortBreakEven = (avgShortPrice > 0.0) ? (avgShortPrice - shortPriceDiff) : 0.0;
 
   // Set stop loss for each position at its break-even price
   for (int i = PositionsTotal() - 1; i >= 0; i--) {
     if (PositionGetTicket(i) == 0) continue;
     if (PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-    long   type            = PositionGetInteger(POSITION_TYPE);
-    double point           = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    double openPrice       = PositionGetDouble(POSITION_PRICE_OPEN);
-    double stopLoss        = PositionGetDouble(POSITION_SL);
-    double profitTrigger   = (type == POSITION_TYPE_BUY) ? openPrice + inpBeProfitTrigger * point : openPrice - inpBeProfitTrigger * point;
-    double currPrice       = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    bool   triggerReached  = (type == POSITION_TYPE_BUY) ? (currPrice >= profitTrigger) : (currPrice <= profitTrigger);
-    double newStopLoss     = (type == POSITION_TYPE_BUY) ? longBreakEven : shortBreakEven;
-    bool   stopLossUpdated = (type == POSITION_TYPE_BUY) ? (newStopLoss > stopLoss) : (newStopLoss < stopLoss);
-    if (triggerReached && stopLossUpdated) {
+    long   type          = PositionGetInteger(POSITION_TYPE);
+    double point         = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double openPrice     = PositionGetDouble(POSITION_PRICE_OPEN);
+    double stopLoss      = PositionGetDouble(POSITION_SL);
+    double profitTrigger = (type == POSITION_TYPE_BUY) ? avgLongPrice + inpBeProfitTrigger * point : avgShortPrice - inpBeProfitTrigger * point;
+    double currPrice     = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double newStopLoss   = (type == POSITION_TYPE_BUY) ? longBreakEven : shortBreakEven;
+    bool   triggerReached    = (type == POSITION_TYPE_BUY) ? (currPrice >= profitTrigger) : (currPrice <= profitTrigger);
+    bool   stopLossUpdated   = (type == POSITION_TYPE_BUY) ? (newStopLoss > stopLoss) : (newStopLoss < stopLoss);
+    if (triggerReached && stopLossUpdated /*&& profitMoreThanFee*/) {
       double takeProfit = PositionGetDouble(POSITION_TP);
       PrintFormat("***OpenPrice: %f | ProfitTrigger: %f | Break Even stoploss: %f | Current price: %f", openPrice, profitTrigger, newStopLoss, currPrice);
       if (!trade.PositionModify(PositionGetTicket(i), newStopLoss, takeProfit)) {
